@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { createDataStore } from "../../../src/data/store.js";
 import { createConsumptionLog } from "../../../src/modules/consumption-log.js";
 import type { ConsumptionLog } from "../../../src/modules/consumption-log.types.js";
+import { createDaySnapshot } from "../../../src/modules/day-snapshot.js";
+import type { DaySnapshotReader } from "../../../src/modules/day-snapshot.types.js";
 import type { FoodCatalog } from "../../../src/modules/food-catalog.js";
 import { createFoodCatalog } from "../../../src/modules/food-catalog.js";
 import { createLogRoutes } from "../../../src/routes/web/log.jsx";
@@ -11,6 +13,8 @@ interface Harness {
 	app: ReturnType<typeof createLogRoutes>;
 	catalog: FoodCatalog;
 	log: ConsumptionLog;
+	snapshot: DaySnapshotReader;
+	store: ReturnType<typeof createDataStore>;
 }
 
 function harness(): Harness {
@@ -18,8 +22,9 @@ function harness(): Harness {
 	const store = createDataStore(db);
 	const catalog = createFoodCatalog(store);
 	const log = createConsumptionLog(store);
-	const app = createLogRoutes(catalog, log);
-	return { app, catalog, log };
+	const snapshot = createDaySnapshot(store);
+	const app = createLogRoutes(catalog, log, snapshot);
+	return { app, catalog, log, snapshot, store };
 }
 
 function formPost(fields: Record<string, string>): {
@@ -256,5 +261,117 @@ describe("GET /days/:date — log form unit selector", () => {
 		expect(res.status).toBe(200);
 		const html = await res.text();
 		expect(html).not.toContain('name="unit"');
+	});
+});
+
+describe("GET /days/:date — day snapshot view", () => {
+	const OATMEAL = {
+		name: "Oatmeal",
+		referencePortion: { value: 100, unit: "g" as const },
+		nutrition: {
+			calories: 389,
+			protein: 16.9,
+			carbs: 66.3,
+			fat: 6.9,
+			fiber: 10.6,
+			sugar: 0,
+			sodium: 0,
+		},
+	};
+	const EGG = {
+		name: "Egg",
+		referencePortion: { value: 1, unit: "unit" as const },
+		nutrition: {
+			calories: 78,
+			protein: 6.3,
+			carbs: 0.6,
+			fat: 5.3,
+			fiber: 0,
+			sugar: 0.6,
+			sodium: 62,
+		},
+	};
+
+	it("renders zero totals and an empty entries list for a day with nothing logged", async () => {
+		const { app } = harness();
+
+		const res = await app.request("/2025-01-01");
+		expect(res.status).toBe(200);
+		const html = await res.text();
+
+		expect(html).toContain("Nothing logged yet.");
+		expect(html).toContain("Day totals");
+		expect(html).toMatch(/total-calories[^>]*>0<\/strong>/);
+	});
+
+	it("renders day totals and per-item contributions scaled by quantity", async () => {
+		const { app, catalog, log } = harness();
+		const oat = catalog.createFood(OATMEAL);
+		const egg = catalog.createFood(EGG);
+		log.logConsumption("2025-01-01", oat.id, 200); // 2× reference
+		log.logConsumption("2025-01-01", egg.id, 2); // 2× reference
+
+		const res = await app.request("/2025-01-01");
+		expect(res.status).toBe(200);
+		const html = await res.text();
+
+		// Per-entry contributions visible.
+		expect(html).toContain("Oatmeal");
+		expect(html).toContain("Egg");
+		expect(html).toContain(">778<"); // oat 2× calories
+		expect(html).toContain(">156<"); // egg 2× calories
+
+		// Day totals — calories = 389*2 + 78*2 = 934; protein = 16.9*2 + 6.3*2 = 46.4.
+		expect(html).toMatch(/total-calories[^>]*>934<\/strong>/);
+		expect(html).toMatch(/total-protein[^>]*>46.4 g</);
+	});
+
+	it("provides previous/next day navigation links", async () => {
+		const { app } = harness();
+
+		const res = await app.request("/2025-01-15");
+		const html = await res.text();
+
+		expect(html).toContain('href="/days/2025-01-14"');
+		expect(html).toContain('href="/days/2025-01-16"');
+	});
+
+	it("navigates across month and year boundaries", async () => {
+		const { app } = harness();
+
+		expect(await (await app.request("/2025-01-01")).text()).toContain(
+			'href="/days/2024-12-31"',
+		);
+		expect(await (await app.request("/2025-12-31")).text()).toContain(
+			'href="/days/2026-01-01"',
+		);
+	});
+
+	it("reflects an edited Food's new nutrition in a past day's totals", async () => {
+		const { app, catalog, log } = harness();
+		const food = catalog.createFood(OATMEAL);
+		log.logConsumption("2025-01-01", food.id, 100);
+
+		let html = await (await app.request("/2025-01-01")).text();
+		expect(html).toMatch(/total-calories[^>]*>389<\/strong>/);
+
+		catalog.updateFood(food.id, {
+			nutrition: { ...OATMEAL.nutrition, calories: 500 },
+		});
+
+		html = await (await app.request("/2025-01-01")).text();
+		expect(html).toMatch(/total-calories[^>]*>500<\/strong>/);
+	});
+
+	it("shows an archived Food's name in the snapshot of a day that references it", async () => {
+		const { app, catalog, log, store } = harness();
+		const food = catalog.createFood(OATMEAL);
+		log.logConsumption("2025-01-01", food.id, 100);
+		// Archival isn't on the FoodCatalog interface yet (#5); archive via the store.
+		store.updateFood(food.id, { archived: true, name: "Archived Oatmeal" });
+
+		const html = await (await app.request("/2025-01-01")).text();
+		expect(html).toContain("Archived Oatmeal");
+		expect(html).toMatch(/total-calories[^>]*>389<\/strong>/);
 	});
 });

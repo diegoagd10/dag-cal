@@ -6,6 +6,10 @@ import {
 	type LogEntry,
 	LogEntryNotFoundError,
 } from "../../modules/consumption-log.types.js";
+import type {
+	DaySnapshotReader,
+	Nutrition,
+} from "../../modules/day-snapshot.types.js";
 import type { Food, FoodCatalog } from "../../modules/food-catalog.js";
 import {
 	FoodNotFoundError,
@@ -20,6 +24,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 export function createLogRoutes(
 	catalog: FoodCatalog,
 	log: ConsumptionLog,
+	snapshot: DaySnapshotReader,
 ): Hono {
 	const app = new Hono();
 
@@ -29,16 +34,17 @@ export function createLogRoutes(
 		if (!ISO_DATE.test(date)) return c.text("Invalid date", 400);
 
 		const foods = catalog.listActiveFoods();
-		const entries = log.listEntries(date);
-		// Resolve each entry's Food so the unit + name render without JS.
-		const rows = entries.map((e) => ({
-			entry: e,
-			food: catalog.getFood(e.foodId),
-		}));
+		const daySnapshot = snapshot.getDaySnapshot(date);
 
 		return c.html(
 			<Layout title={`Log — ${date}`}>
-				<DayView date={date} foods={foods} rows={rows} />
+				<DayView
+					date={date}
+					foods={foods}
+					daySnapshot={daySnapshot}
+					prev={shiftDate(date, -1)}
+					next={shiftDate(date, 1)}
+				/>
 			</Layout>,
 		);
 	});
@@ -55,13 +61,27 @@ export function createLogRoutes(
 			return c.redirect(`/days/${date}`);
 		} catch (e) {
 			if (e instanceof ValidationError) {
-				return renderDayWith(c, catalog, log, date, e.message, body);
+				return renderDayWith(c, catalog, snapshot, date, e.message, body);
 			}
 			if (e instanceof FoodNotFoundError) {
-				return renderDayWith(c, catalog, log, date, `Food not found`, body);
+				return renderDayWith(
+					c,
+					catalog,
+					snapshot,
+					date,
+					`Food not found`,
+					body,
+				);
 			}
 			if (e instanceof FoodArchivedError) {
-				return renderDayWith(c, catalog, log, date, `Food is archived`, body);
+				return renderDayWith(
+					c,
+					catalog,
+					snapshot,
+					date,
+					`Food is archived`,
+					body,
+				);
 			}
 			throw e;
 		}
@@ -108,23 +128,21 @@ export function createLogRoutes(
 async function renderDayWith(
 	c: Context,
 	catalog: FoodCatalog,
-	log: ConsumptionLog,
+	snapshot: DaySnapshotReader,
 	date: string,
 	error: string,
 	body: Record<string, unknown>,
 ) {
 	const foods = catalog.listActiveFoods();
-	const entries = log.listEntries(date);
-	const rows = entries.map((e) => ({
-		entry: e,
-		food: catalog.getFood(e.foodId),
-	}));
+	const daySnapshot = snapshot.getDaySnapshot(date);
 	return c.html(
 		<Layout title={`Log — ${date}`}>
 			<DayView
 				date={date}
 				foods={foods}
-				rows={rows}
+				daySnapshot={daySnapshot}
+				prev={shiftDate(date, -1)}
+				next={shiftDate(date, 1)}
 				error={error}
 				formDefaults={{
 					foodId: String(body.foodId ?? ""),
@@ -146,6 +164,18 @@ function redirectOrError(
 	if (ISO_DATE.test(date))
 		return c.redirect(`/days/${date}?err=${encodeURIComponent(error)}`);
 	return c.text(error, 400);
+}
+
+/**
+ * UTC-safe prev/next ISO date. Constructs the date from a YYYY-MM-DD string at
+ * UTC midnight, shifts by `delta` days, and formats back to YYYY-MM-DD — never
+ * touches local time, so month/year boundaries and DST can't skew the result.
+ */
+function shiftDate(iso: string, delta: number): string {
+	const [y, m, d] = iso.split("-").map(Number);
+	const date = new Date(Date.UTC(y, m - 1, d));
+	date.setUTCDate(date.getUTCDate() + delta);
+	return date.toISOString().slice(0, 10);
 }
 
 // ---- Parsing ----
@@ -194,7 +224,12 @@ function resolveQuantity(
 interface DayViewProps {
 	date: string;
 	foods: Food[];
-	rows: { entry: LogEntry; food: Food | undefined }[];
+	daySnapshot: {
+		totals: Nutrition;
+		entries: { entry: LogEntry; food: Food; macros: Nutrition }[];
+	};
+	prev: string;
+	next: string;
 	error?: string;
 	formDefaults?: { foodId: string; quantity: string; unit: string };
 }
@@ -202,12 +237,18 @@ interface DayViewProps {
 const DayView: FC<DayViewProps> = ({
 	date,
 	foods,
-	rows,
+	daySnapshot,
+	prev,
+	next,
 	error,
 	formDefaults,
 }) => (
 	<div>
 		<h1>{date}</h1>
+		<p>
+			<a href={`/days/${prev}`}>← Previous</a> |{" "}
+			<a href={`/days/${next}`}>Next →</a>
+		</p>
 		<p>
 			<a href="/foods">Manage Foods</a>
 		</p>
@@ -217,13 +258,14 @@ const DayView: FC<DayViewProps> = ({
 			error={error}
 			defaults={formDefaults}
 		/>
+		<Totals totals={daySnapshot.totals} />
 		<h2>Entries</h2>
-		{rows.length === 0 ? (
+		{daySnapshot.entries.length === 0 ? (
 			<p>Nothing logged yet.</p>
 		) : (
 			<ul>
-				{rows.map(({ entry, food }) => (
-					<LogEntryRow date={date} entry={entry} food={food} />
+				{daySnapshot.entries.map(({ entry, food, macros }) => (
+					<LogEntryRow date={date} entry={entry} food={food} macros={macros} />
 				))}
 			</ul>
 		)}
@@ -305,18 +347,51 @@ const LogEntryForm: FC<LogEntryFormProps> = ({
 	);
 };
 
+interface TotalsProps {
+	totals: Nutrition;
+}
+
+const Totals: FC<TotalsProps> = ({ totals }) => (
+	<section>
+		<h2>Day totals</h2>
+		<dl>
+			<dt>Calories</dt>
+			<dd>
+				<strong data-testid="total-calories">{round(totals.calories)}</strong>{" "}
+				kcal
+			</dd>
+			<dt>Protein</dt>
+			<dd data-testid="total-protein">{round(totals.protein)} g</dd>
+			<dt>Carbs</dt>
+			<dd data-testid="total-carbs">{round(totals.carbs)} g</dd>
+			<dt>Fat</dt>
+			<dd data-testid="total-fat">{round(totals.fat)} g</dd>
+			<dt>Fiber</dt>
+			<dd data-testid="total-fiber">{round(totals.fiber)} g</dd>
+			<dt>Sugar</dt>
+			<dd data-testid="total-sugar">{round(totals.sugar)} g</dd>
+			<dt>Sodium</dt>
+			<dd data-testid="total-sodium">{round(totals.sodium)} mg</dd>
+		</dl>
+	</section>
+);
+
 interface LogEntryRowProps {
 	date: string;
 	entry: LogEntry;
-	food: Food | undefined;
+	food: Food;
+	macros: Nutrition;
 }
 
-const LogEntryRow: FC<LogEntryRowProps> = ({ date, entry, food }) => {
-	const name = food?.name ?? "(archived food)";
-	const unit = food?.referencePortion.unit ?? "";
+const LogEntryRow: FC<LogEntryRowProps> = ({ date, entry, food, macros }) => {
+	const unit = food.referencePortion.unit;
 	return (
 		<li>
-			{name} — {entry.quantity} {unit}
+			{food.name} — {entry.quantity} {unit} (
+			<span data-testid="entry-calories">{round(macros.calories)}</span> kcal,{" "}
+			<span data-testid="entry-protein">{round(macros.protein)}</span>g p,{" "}
+			<span data-testid="entry-carbs">{round(macros.carbs)}</span>g c,{" "}
+			<span data-testid="entry-fat">{round(macros.fat)}</span>g f)
 			{" | "}
 			<form
 				method="post"
@@ -346,3 +421,8 @@ const LogEntryRow: FC<LogEntryRowProps> = ({ date, entry, food }) => {
 		</li>
 	);
 };
+
+function round(n: number): number {
+	// Display two decimals max, drop trailing zeros.
+	return Number(n.toFixed(2));
+}
