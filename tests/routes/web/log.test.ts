@@ -326,6 +326,27 @@ describe("GET /days/:date — day snapshot view", () => {
 		expect(html).toMatch(/total-protein[^>]*>46.4 g</);
 	});
 
+	it("renders all seven per-entry macro contributions (calories/protein/carbs/fat/fiber/sugar/sodium)", async () => {
+		const { app, catalog, log } = harness();
+		const oat = catalog.createFood(OATMEAL);
+		const egg = catalog.createFood(EGG);
+		log.logConsumption("2025-01-01", oat.id, 200); // 2× reference
+		log.logConsumption("2025-01-01", egg.id, 2); // 2× reference
+
+		const res = await app.request("/2025-01-01");
+		expect(res.status).toBe(200);
+		const html = await res.text();
+
+		// Oatmeal 2×: fiber 21.2g, sugar 0, sodium 0.
+		expect(html).toContain('data-testid="entry-fiber">21.2');
+		expect(html).toContain('data-testid="entry-sugar">0');
+		expect(html).toContain('data-testid="entry-sodium">0');
+		// Egg 2×: fiber 0, sugar 1.2, sodium 124.
+		expect(html).toContain('data-testid="entry-fiber">0');
+		expect(html).toContain('data-testid="entry-sugar">1.2');
+		expect(html).toContain('data-testid="entry-sodium">124');
+	});
+
 	it("provides previous/next day navigation links", async () => {
 		const { app } = harness();
 

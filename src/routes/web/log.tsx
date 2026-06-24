@@ -391,7 +391,10 @@ const LogEntryRow: FC<LogEntryRowProps> = ({ date, entry, food, macros }) => {
 			<span data-testid="entry-calories">{round(macros.calories)}</span> kcal,{" "}
 			<span data-testid="entry-protein">{round(macros.protein)}</span>g p,{" "}
 			<span data-testid="entry-carbs">{round(macros.carbs)}</span>g c,{" "}
-			<span data-testid="entry-fat">{round(macros.fat)}</span>g f)
+			<span data-testid="entry-fat">{round(macros.fat)}</span>g f,{" "}
+			<span data-testid="entry-fiber">{round(macros.fiber)}</span>g fiber,{" "}
+			<span data-testid="entry-sugar">{round(macros.sugar)}</span>g sugar,{" "}
+			<span data-testid="entry-sodium">{round(macros.sodium)}</span>mg sodium)
 			{" | "}
 			<form
 				method="post"
