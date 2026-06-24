@@ -1,18 +1,36 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { serve } from "@hono/node-server";
+import Database from "better-sqlite3";
 import { Hono } from "hono";
-import { Home } from "./views/Home.jsx";
+import { createDataStore } from "./data/store.js";
+import { createFoodCatalog } from "./modules/food-catalog.js";
+import { createFoodsRoutes } from "./routes/web/foods.jsx";
+import { Layout } from "./views/Layout.jsx";
+
+const DB_PATH = "data/dag-cal.sqlite";
+
+// Ensure parent directory exists
+mkdirSync(dirname(DB_PATH), { recursive: true });
+
+const db = new Database(DB_PATH);
+const store = createDataStore(db);
+const catalog = createFoodCatalog(store);
 
 const app = new Hono();
 
 app.get("/", (c) => {
-	return c.text("Hello Hono!");
+	return c.html(
+		<Layout title="Home">
+			<h1>dag-cal</h1>
+			<p>
+				<a href="/foods">Manage Foods</a>
+			</p>
+		</Layout>,
+	);
 });
 
-app.get("/jsx/:name", (c) => {
-	const name = c.req.param("name");
-	const items = ["Hono", "JSX", "TypeScript", "Node"];
-	return c.html(<Home name={name} items={items} />);
-});
+app.route("/foods", createFoodsRoutes(catalog));
 
 serve(
 	{
