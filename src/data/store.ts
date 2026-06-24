@@ -4,13 +4,14 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 type SqliteDatabase = InstanceType<typeof Database>;
 
 import { eq, like } from "drizzle-orm";
+import type { LogEntry, LogEntryId } from "../modules/consumption-log.types.js";
 import type {
 	Food,
 	FoodId,
 	Nutrition,
 	ReferencePortion,
 } from "../modules/food-catalog.types.js";
-import { foods } from "./schema.js";
+import { foods, logEntries } from "./schema.js";
 
 function rowToFood(row: typeof foods.$inferSelect): Food {
 	return {
@@ -33,7 +34,7 @@ function rowToFood(row: typeof foods.$inferSelect): Food {
 	};
 }
 
-export interface FoodStore {
+export interface DataStore {
 	insertFood(food: {
 		id: FoodId;
 		name: string;
@@ -52,10 +53,31 @@ export interface FoodStore {
 	): Food | undefined;
 	findActiveFoods(nameQuery?: string): Food[];
 	findFoodById(id: FoodId): Food | undefined;
+	insertLogEntry(entry: {
+		id: LogEntryId;
+		date: string;
+		foodId: FoodId;
+		quantity: number;
+	}): LogEntry;
+	updateLogEntry(id: LogEntryId, quantity: number): LogEntry | undefined;
+	deleteLogEntry(id: LogEntryId): void;
+	findEntriesByDate(date: string): LogEntry[];
 }
 
-export function createDataStore(db: SqliteDatabase): FoodStore {
+function rowToLogEntry(row: typeof logEntries.$inferSelect): LogEntry {
+	return {
+		id: row.id,
+		date: row.date,
+		foodId: row.foodId,
+		quantity: row.quantity,
+	};
+}
+
+export function createDataStore(db: SqliteDatabase): DataStore {
 	const orm = drizzle(db);
+
+	// Enforce FK constraints so log_entries.food_id → foods.id is real.
+	db.pragma("foreign_keys = ON");
 
 	// Bootstrap schema
 	db.exec(`
@@ -72,7 +94,14 @@ export function createDataStore(db: SqliteDatabase): FoodStore {
 			sugar REAL NOT NULL,
 			sodium REAL NOT NULL,
 			archived INTEGER NOT NULL DEFAULT 0
-		)
+		);
+		CREATE TABLE IF NOT EXISTS log_entries (
+			id TEXT PRIMARY KEY,
+			date TEXT NOT NULL,
+			food_id TEXT NOT NULL,
+			quantity REAL NOT NULL,
+			FOREIGN KEY (food_id) REFERENCES foods(id)
+		);
 	`);
 
 	return {
@@ -162,6 +191,57 @@ export function createDataStore(db: SqliteDatabase): FoodStore {
 		findFoodById(id) {
 			const row = orm.select().from(foods).where(eq(foods.id, id)).get();
 			return row ? rowToFood(row) : undefined;
+		},
+
+		insertLogEntry(input) {
+			orm
+				.insert(logEntries)
+				.values({
+					id: input.id,
+					date: input.date,
+					foodId: input.foodId,
+					quantity: input.quantity,
+				})
+				.run();
+			return rowToLogEntry({
+				id: input.id,
+				date: input.date,
+				foodId: input.foodId,
+				quantity: input.quantity,
+			});
+		},
+
+		updateLogEntry(id, quantity) {
+			const existing = orm
+				.select()
+				.from(logEntries)
+				.where(eq(logEntries.id, id))
+				.get();
+			if (!existing) return undefined;
+			orm
+				.update(logEntries)
+				.set({ quantity })
+				.where(eq(logEntries.id, id))
+				.run();
+			const updated = orm
+				.select()
+				.from(logEntries)
+				.where(eq(logEntries.id, id))
+				.get();
+			return updated ? rowToLogEntry(updated) : undefined;
+		},
+
+		deleteLogEntry(id) {
+			orm.delete(logEntries).where(eq(logEntries.id, id)).run();
+		},
+
+		findEntriesByDate(date) {
+			return orm
+				.select()
+				.from(logEntries)
+				.where(eq(logEntries.date, date))
+				.all()
+				.map(rowToLogEntry);
 		},
 	};
 }

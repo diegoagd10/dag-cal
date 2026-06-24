@@ -5,6 +5,8 @@ interface LayoutProps {
 	children?: unknown;
 }
 
+const today = () => new Date().toISOString().slice(0, 10);
+
 export const Layout: FC<LayoutProps> = ({ title, children }) => {
 	return (
 		<html lang="en">
@@ -15,7 +17,8 @@ export const Layout: FC<LayoutProps> = ({ title, children }) => {
 			</head>
 			<body>
 				<nav>
-					<a href="/">Home</a> | <a href="/foods">Foods</a>
+					<a href="/">Home</a> | <a href={`/days/${today()}`}>Today</a> |{" "}
+					<a href="/foods">Foods</a>
 				</nav>
 				<main>{children}</main>
 			</body>

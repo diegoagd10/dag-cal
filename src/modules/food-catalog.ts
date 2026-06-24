@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { FoodStore } from "../data/store.js";
+import type { DataStore } from "../data/store.js";
 import type {
 	CreateFoodInput,
 	Food,
@@ -46,7 +46,7 @@ export class FoodNotFoundError extends Error {
 	}
 }
 
-export function createFoodCatalog(store: FoodStore): FoodCatalog {
+export function createFoodCatalog(store: DataStore): FoodCatalog {
 	return {
 		createFood(input: CreateFoodInput): Food {
 			validateName(input.name);

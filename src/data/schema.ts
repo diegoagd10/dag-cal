@@ -14,3 +14,12 @@ export const foods = sqliteTable("foods", {
 	sodium: real("sodium").notNull(),
 	archived: integer("archived", { mode: "boolean" }).notNull().default(false),
 });
+
+export const logEntries = sqliteTable("log_entries", {
+	id: text("id").primaryKey(),
+	date: text("date").notNull(),
+	foodId: text("food_id")
+		.notNull()
+		.references(() => foods.id),
+	quantity: real("quantity").notNull(),
+});
