@@ -76,6 +76,27 @@ export function createFoodCatalog(store: DataStore): FoodCatalog {
 			return updated;
 		},
 
+		deleteFood(id: FoodId): { outcome: "archived" | "deleted" } {
+			const food = store.findFoodById(id);
+			if (!food) {
+				throw new FoodNotFoundError(id);
+			}
+			// ADR 0001: a Food referenced by ≥1 log entry is archived (still
+			// resolvable for past days); a Food with zero references is hard-deleted.
+			// The reference count comes from the shared Data store, so FoodCatalog
+			// never depends on ConsumptionLog.
+			if (store.countLogEntriesForFood(id) > 0) {
+				store.updateFood(id, { archived: true });
+				return { outcome: "archived" };
+			}
+			store.deleteFood(id);
+			return { outcome: "deleted" };
+		},
+
+		isReferenced(id: FoodId): boolean {
+			return store.countLogEntriesForFood(id) > 0;
+		},
+
 		listActiveFoods(nameQuery?: string): Food[] {
 			return store.findActiveFoods(nameQuery);
 		},

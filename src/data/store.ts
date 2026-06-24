@@ -3,7 +3,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 
 type SqliteDatabase = InstanceType<typeof Database>;
 
-import { eq, like } from "drizzle-orm";
+import { count, eq, like } from "drizzle-orm";
 import type { LogEntry, LogEntryId } from "../modules/consumption-log.types.js";
 import type {
 	Food,
@@ -53,6 +53,8 @@ export interface DataStore {
 	): Food | undefined;
 	findActiveFoods(nameQuery?: string): Food[];
 	findFoodById(id: FoodId): Food | undefined;
+	countLogEntriesForFood(id: FoodId): number;
+	deleteFood(id: FoodId): boolean;
 	insertLogEntry(entry: {
 		id: LogEntryId;
 		date: string;
@@ -191,6 +193,20 @@ export function createDataStore(db: SqliteDatabase): DataStore {
 		findFoodById(id) {
 			const row = orm.select().from(foods).where(eq(foods.id, id)).get();
 			return row ? rowToFood(row) : undefined;
+		},
+
+		countLogEntriesForFood(id) {
+			const row = orm
+				.select({ value: count() })
+				.from(logEntries)
+				.where(eq(logEntries.foodId, id))
+				.get();
+			return row?.value ?? 0;
+		},
+
+		deleteFood(id) {
+			const result = orm.delete(foods).where(eq(foods.id, id)).run();
+			return result.changes > 0;
 		},
 
 		insertLogEntry(input) {

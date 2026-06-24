@@ -56,7 +56,7 @@ export function createFoodsRoutes(catalog: FoodCatalog): Hono {
 		}
 		return c.html(
 			<Layout title={food.name}>
-				<FoodView food={food} />
+				<FoodView food={food} referenced={catalog.isReferenced(food.id)} />
 			</Layout>,
 		);
 	});
@@ -69,9 +69,38 @@ export function createFoodsRoutes(catalog: FoodCatalog): Hono {
 		}
 		return c.html(
 			<Layout title={`Edit ${food.name}`}>
-				<FoodForm food={food} />
+				<FoodForm food={food} referenced={catalog.isReferenced(food.id)} />
 			</Layout>,
 		);
+	});
+
+	// GET /foods/:id/delete — confirmation
+	app.get("/:id/delete", (c) => {
+		const food = catalog.getFood(c.req.param("id"));
+		if (!food) {
+			return c.text("Food not found", 404);
+		}
+		return c.html(
+			<Layout title={`Delete ${food.name}`}>
+				<DeleteConfirm food={food} referenced={catalog.isReferenced(food.id)} />
+			</Layout>,
+		);
+	});
+
+	// POST /foods/:id/delete — delete handler (archive or hard-delete per ADR 0001)
+	app.post("/:id/delete", (c) => {
+		const id = c.req.param("id");
+		try {
+			const { outcome } = catalog.deleteFood(id);
+			return outcome === "archived"
+				? c.redirect(`/foods/${id}`)
+				: c.redirect("/foods");
+		} catch (e) {
+			if (e instanceof FoodNotFoundError) {
+				return c.text("Food not found", 404);
+			}
+			throw e;
+		}
 	});
 
 	// POST /foods/:id — update handler
@@ -92,6 +121,7 @@ export function createFoodsRoutes(catalog: FoodCatalog): Hono {
 					<Layout title={`Edit ${food.name}`}>
 						<FoodForm
 							food={food}
+							referenced={catalog.isReferenced(food.id)}
 							error={e.message}
 							defaults={bodyToDefaults(body)}
 						/>
@@ -233,17 +263,34 @@ const FoodList: FC<FoodListProps> = ({ foods, query }) => (
 
 interface FoodViewProps {
 	food: Food;
+	referenced: boolean;
 }
 
-const FoodView: FC<FoodViewProps> = ({ food }) => {
+const FoodView: FC<FoodViewProps> = ({ food, referenced }) => {
 	const { nutrition, referencePortion: r } = food;
 	return (
 		<div>
-			<h1>{food.name}</h1>
+			<h1>
+				{food.name}
+				{food.archived && <em> (Archived)</em>}
+			</h1>
+			{food.archived && (
+				<p style="color: #888;">
+					Archived foods are hidden from new log entries but still appear on
+					past days that reference them.
+				</p>
+			)}
 			<p>
 				<a href={`/foods/${food.id}/edit`}>Edit</a> |{" "}
+				<a href={`/foods/${food.id}/delete`}>Delete…</a> |{" "}
 				<a href="/foods">← Back to list</a>
 			</p>
+			{!food.archived && referenced && (
+				<p style="color: #a00;">
+					This Food appears in your log history — editing or deleting it will
+					affect past days.
+				</p>
+			)}
 			<h2>Reference portion</h2>
 			<p>
 				{r.value} {r.unit}
@@ -303,11 +350,12 @@ const NutritionTable: FC<NutritionTableProps> = ({ nutrition }) => (
 
 interface FoodFormProps {
 	food?: Food;
+	referenced?: boolean;
 	error?: string;
 	defaults?: ReturnType<typeof bodyToDefaults>;
 }
 
-const FoodForm: FC<FoodFormProps> = ({ food, error, defaults }) => {
+const FoodForm: FC<FoodFormProps> = ({ food, referenced, error, defaults }) => {
 	const isEdit = !!food;
 	const action = isEdit ? `/foods/${food.id}` : "/foods";
 	const d = defaults ?? {
@@ -326,6 +374,13 @@ const FoodForm: FC<FoodFormProps> = ({ food, error, defaults }) => {
 	return (
 		<div>
 			<h1>{isEdit ? `Edit ${food.name}` : "New Food"}</h1>
+			{isEdit && referenced && (
+				<p style="color: #a00;">
+					This Food is referenced by past log entries. Saving changes will
+					retroactively affect every past day that uses it — your history will
+					change.
+				</p>
+			)}
 			{error && <p style="color: red;">{error}</p>}
 			<form method="post" action={action}>
 				<fieldset>
@@ -414,5 +469,35 @@ const NutritionField: FC<NutritionFieldProps> = ({
 			<input name={name} type="number" step="any" value={value} required />{" "}
 			{unit}
 		</label>
+	</div>
+);
+
+interface DeleteConfirmProps {
+	food: Food;
+	referenced: boolean;
+}
+
+const DeleteConfirm: FC<DeleteConfirmProps> = ({ food, referenced }) => (
+	<div>
+		<h1>Delete {food.name}?</h1>
+		{referenced ? (
+			<p style="color: #a00;">
+				This Food appears in your log history. Deleting it will archive it — it
+				will no longer be selectable for new log entries, but past days that
+				reference it will still resolve and keep their totals.
+			</p>
+		) : (
+			<p>
+				This Food is not referenced by any log entry. It will be permanently
+				deleted.
+			</p>
+		)}
+		<form method="post" action={`/foods/${food.id}/delete`}>
+			<button type="submit">
+				{referenced ? "Archive Food" : "Delete Food"}
+			</button>
+			{" | "}
+			<a href={`/foods/${food.id}`}>Cancel</a>
+		</form>
 	</div>
 );

@@ -385,11 +385,14 @@ describe("GET /days/:date — day snapshot view", () => {
 	});
 
 	it("shows an archived Food's name in the snapshot of a day that references it", async () => {
-		const { app, catalog, log, store } = harness();
+		const { app, catalog, log } = harness();
 		const food = catalog.createFood(OATMEAL);
 		log.logConsumption("2025-01-01", food.id, 100);
-		// Archival isn't on the FoodCatalog interface yet (#5); archive via the store.
-		store.updateFood(food.id, { archived: true, name: "Archived Oatmeal" });
+		// Renaming then deleting through the public interface: a referenced
+		// Food is archived (ADR 0001), staying resolvable for past days.
+		catalog.updateFood(food.id, { name: "Archived Oatmeal" });
+		const outcome = catalog.deleteFood(food.id);
+		expect(outcome).toEqual({ outcome: "archived" });
 
 		const html = await (await app.request("/2025-01-01")).text();
 		expect(html).toContain("Archived Oatmeal");

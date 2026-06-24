@@ -1,13 +1,36 @@
 import Database from "better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDataStore } from "../../src/data/store.js";
+import { createConsumptionLog } from "../../src/modules/consumption-log.js";
+import type { ConsumptionLog } from "../../src/modules/consumption-log.types.js";
+import { createDaySnapshot } from "../../src/modules/day-snapshot.js";
+import type { DaySnapshotReader } from "../../src/modules/day-snapshot.types.js";
 import type { FoodCatalog } from "../../src/modules/food-catalog.js";
-import { createFoodCatalog } from "../../src/modules/food-catalog.js";
+import {
+	createFoodCatalog,
+	FoodNotFoundError,
+} from "../../src/modules/food-catalog.js";
 
 function freshCatalog(): FoodCatalog {
 	const db = new Database(":memory:");
 	const store = createDataStore(db);
 	return createFoodCatalog(store);
+}
+
+interface CatalogWithLog {
+	catalog: FoodCatalog;
+	log: ConsumptionLog;
+	snapshot: DaySnapshotReader;
+}
+
+function freshCatalogWithLog(): CatalogWithLog {
+	const db = new Database(":memory:");
+	const store = createDataStore(db);
+	return {
+		catalog: createFoodCatalog(store),
+		log: createConsumptionLog(store),
+		snapshot: createDaySnapshot(store),
+	};
 }
 
 const validFood = {
@@ -132,9 +155,6 @@ describe("FoodCatalog", () => {
 			catalog.createFood({ ...validFood, name: "Active" });
 			catalog.createFood({ ...validFood, name: "Also Active" });
 
-			// Simulate archival via direct store manipulation for test purposes
-			// We can't archive via the interface (deferred), but we can check
-			// that listActiveFoods filters archived=false
 			const foods = catalog.listActiveFoods();
 			expect(foods).toHaveLength(2);
 			expect(foods.every((f) => !f.archived)).toBe(true);
@@ -188,6 +208,97 @@ describe("FoodCatalog", () => {
 			const food = catalog.createFood(validFood);
 			const retrieved = catalog.getFood(food.id);
 			expect(retrieved).toHaveProperty("archived", false);
+		});
+	});
+
+	describe("isReferenced", () => {
+		it("returns false for a Food with zero log entries", () => {
+			const { catalog } = freshCatalogWithLog();
+			const food = catalog.createFood(validFood);
+
+			expect(catalog.isReferenced(food.id)).toBe(false);
+		});
+
+		it("returns true once a log entry references the Food", () => {
+			const { catalog, log } = freshCatalogWithLog();
+			const food = catalog.createFood(validFood);
+			log.logConsumption("2025-01-01", food.id, 100);
+
+			expect(catalog.isReferenced(food.id)).toBe(true);
+		});
+
+		it("returns false for an unknown id (no row to be referenced)", () => {
+			const { catalog } = freshCatalogWithLog();
+			expect(catalog.isReferenced("does-not-exist")).toBe(false);
+		});
+	});
+
+	describe("deleteFood", () => {
+		it("hard-deletes a Food with zero log entries and returns outcome 'deleted'", () => {
+			const { catalog } = freshCatalogWithLog();
+			const food = catalog.createFood(validFood);
+
+			const result = catalog.deleteFood(food.id);
+
+			expect(result).toEqual({ outcome: "deleted" });
+			expect(catalog.getFood(food.id)).toBeUndefined();
+			expect(catalog.listActiveFoods()).toHaveLength(0);
+		});
+
+		it("archives a Food referenced by a log entry and returns outcome 'archived'", () => {
+			const { catalog, log } = freshCatalogWithLog();
+			const food = catalog.createFood(validFood);
+			log.logConsumption("2025-01-01", food.id, 100);
+
+			const result = catalog.deleteFood(food.id);
+
+			expect(result).toEqual({ outcome: "archived" });
+			const archived = catalog.getFood(food.id);
+			expect(archived).toBeDefined();
+			expect(archived?.archived).toBe(true);
+			expect(catalog.listActiveFoods()).toHaveLength(0);
+		});
+
+		it("keeps an archived Food resolvable so past days still compute", () => {
+			const { catalog, log, snapshot } = freshCatalogWithLog();
+			const food = catalog.createFood(validFood);
+			log.logConsumption("2025-01-01", food.id, 100);
+
+			catalog.deleteFood(food.id);
+
+			const day = snapshot.getDaySnapshot("2025-01-01");
+			expect(day.entries).toHaveLength(1);
+			expect(day.entries[0].food.id).toBe(food.id);
+			expect(day.entries[0].food.archived).toBe(true);
+			expect(day.totals.calories).toBe(389);
+		});
+
+		it("archives when referenced by more than one log entry", () => {
+			const { catalog, log } = freshCatalogWithLog();
+			const food = catalog.createFood(validFood);
+			log.logConsumption("2025-01-01", food.id, 100);
+			log.logConsumption("2025-01-02", food.id, 50);
+
+			expect(catalog.deleteFood(food.id)).toEqual({ outcome: "archived" });
+			expect(catalog.getFood(food.id)?.archived).toBe(true);
+		});
+
+		it("throws FoodNotFound for an unknown id", () => {
+			const { catalog } = freshCatalogWithLog();
+			expect(() => catalog.deleteFood("nonexistent-id")).toThrow(
+				FoodNotFoundError,
+			);
+		});
+
+		it("hard-deletes a Food whose log entries were all removed", () => {
+			const { catalog, log } = freshCatalogWithLog();
+			const food = catalog.createFood(validFood);
+			const entry = log.logConsumption("2025-01-01", food.id, 100);
+			log.removeLogEntry(entry.id);
+
+			expect(catalog.isReferenced(food.id)).toBe(false);
+			expect(catalog.deleteFood(food.id)).toEqual({ outcome: "deleted" });
+			expect(catalog.getFood(food.id)).toBeUndefined();
 		});
 	});
 });

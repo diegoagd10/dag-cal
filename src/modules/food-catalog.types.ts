@@ -39,6 +39,8 @@ export type UpdateFoodInput = Partial<{
 export interface FoodCatalog {
 	createFood(input: CreateFoodInput): Food;
 	updateFood(id: FoodId, changes: UpdateFoodInput): Food;
+	deleteFood(id: FoodId): { outcome: "archived" | "deleted" };
+	isReferenced(id: FoodId): boolean;
 	listActiveFoods(nameQuery?: string): Food[];
 	getFood(id: FoodId): Food | undefined;
 }

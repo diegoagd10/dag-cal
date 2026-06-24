@@ -63,9 +63,10 @@ describe("ConsumptionLog", () => {
 		});
 
 		it("throws FoodArchived when the Food is archived", () => {
-			// Archival is not exposed on the FoodCatalog interface yet (#5),
-			// so we archive directly through the store — the live reference is
-			// still resolvable, but logConsumption must reject it.
+			// The public deleteFood hard-deletes unreferenced foods (ADR 0001),
+			// so to exercise the archived guard we archive an unreferenced food
+			// directly through the store — the live reference stays resolvable
+			// but logConsumption must reject it.
 			const { log, catalog, store } = fresh();
 			const food = catalog.createFood(validFood);
 			store.updateFood(food.id, { archived: true });
