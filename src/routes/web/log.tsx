@@ -11,6 +11,8 @@ import {
 	FoodNotFoundError,
 	ValidationError,
 } from "../../modules/food-catalog.js";
+import type { WeightUnit } from "../../modules/units.js";
+import { convertWeight } from "../../modules/units.js";
 import { Layout } from "../../views/Layout.jsx";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -46,13 +48,10 @@ export function createLogRoutes(
 		const date = c.req.param("date");
 		if (!ISO_DATE.test(date)) return c.text("Invalid date", 400);
 		const body = await c.req.parseBody();
+		const foodId = String(body.foodId ?? "");
 
 		try {
-			log.logConsumption(
-				date,
-				String(body.foodId ?? ""),
-				parseQuantity(body.quantity),
-			);
+			log.logConsumption(date, foodId, resolveQuantity(catalog, foodId, body));
 			return c.redirect(`/days/${date}`);
 		} catch (e) {
 			if (e instanceof ValidationError) {
@@ -130,6 +129,7 @@ async function renderDayWith(
 				formDefaults={{
 					foodId: String(body.foodId ?? ""),
 					quantity: String(body.quantity ?? ""),
+					unit: String(body.unit ?? ""),
 				}}
 			/>
 		</Layout>,
@@ -159,6 +159,36 @@ function parseQuantity(raw: unknown): number {
 	return n;
 }
 
+function isWeightUnit(unit: unknown): unit is WeightUnit {
+	return unit === "g" || unit === "oz";
+}
+
+/**
+ * Resolve the canonical quantity (in the Food's reference-portion unit) from
+ * the submitted form body. Weight-based Foods accept the quantity in either
+ * grams or ounces and convert to the reference unit; count-based Foods use the
+ * bare count. Falls back to the reference unit when the Food is missing so
+ * logConsumption can raise FoodNotFound itself.
+ */
+function resolveQuantity(
+	catalog: FoodCatalog,
+	foodId: string,
+	body: Record<string, unknown>,
+): number {
+	const quantity = parseQuantity(body.quantity);
+	const food = catalog.getFood(foodId);
+	if (!food) return quantity;
+
+	const refUnit = food.referencePortion.unit;
+	if (!isWeightUnit(refUnit)) return quantity;
+
+	const submittedUnit = String(body.unit ?? "").trim();
+	if (!isWeightUnit(submittedUnit) || submittedUnit === refUnit) {
+		return quantity;
+	}
+	return convertWeight(quantity, submittedUnit, refUnit);
+}
+
 // ---- Components ----
 
 interface DayViewProps {
@@ -166,7 +196,7 @@ interface DayViewProps {
 	foods: Food[];
 	rows: { entry: LogEntry; food: Food | undefined }[];
 	error?: string;
-	formDefaults?: { foodId: string; quantity: string };
+	formDefaults?: { foodId: string; quantity: string; unit: string };
 }
 
 const DayView: FC<DayViewProps> = ({
@@ -204,7 +234,7 @@ interface LogEntryFormProps {
 	date: string;
 	foods: Food[];
 	error?: string;
-	defaults?: { foodId: string; quantity: string };
+	defaults?: { foodId: string; quantity: string; unit: string };
 }
 
 const LogEntryForm: FC<LogEntryFormProps> = ({
@@ -213,8 +243,11 @@ const LogEntryForm: FC<LogEntryFormProps> = ({
 	error,
 	defaults,
 }) => {
-	const selected = foods.find((f) => f.id === (defaults?.foodId ?? ""));
-	const unit = selected?.referencePortion.unit ?? "";
+	const selected =
+		foods.find((f) => f.id === (defaults?.foodId ?? "")) ?? foods[0];
+	const refUnit = selected?.referencePortion.unit;
+	const isWeight = refUnit === "g" || refUnit === "oz";
+	const unitDefault = defaults?.unit ?? refUnit ?? "";
 	return (
 		<form method="post" action={`/days/${date}/entries`}>
 			<h2>Log a Food</h2>
@@ -240,7 +273,7 @@ const LogEntryForm: FC<LogEntryFormProps> = ({
 			</p>
 			<p>
 				<label>
-					Quantity{unit ? ` (${unit})` : ""}:{" "}
+					Quantity:{" "}
 					<input
 						name="quantity"
 						type="number"
@@ -249,6 +282,18 @@ const LogEntryForm: FC<LogEntryFormProps> = ({
 						value={defaults?.quantity ?? "1"}
 						required
 					/>
+					{isWeight ? (
+						<select name="unit">
+							<option value="g" selected={unitDefault === "g"}>
+								g
+							</option>
+							<option value="oz" selected={unitDefault === "oz"}>
+								oz
+							</option>
+						</select>
+					) : (
+						<span>{refUnit ? ` ${refUnit}` : ""}</span>
+					)}
 				</label>
 			</p>
 			<p>
