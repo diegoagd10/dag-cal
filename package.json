@@ -1,18 +1,27 @@
 {
-  "name": "dag-cal",
-  "type": "module",
-  "scripts": {
-    "dev": "tsx watch src/index.tsx",
-    "build": "tsc",
-    "start": "node dist/index.js"
-  },
-  "dependencies": {
-    "@hono/node-server": "^2.0.6",
-    "hono": "^4.12.27"
-  },
-  "devDependencies": {
-    "@types/node": "^20.11.17",
-    "tsx": "^4.7.1",
-    "typescript": "^5.8.3"
-  }
+	"name": "dag-cal",
+	"type": "module",
+	"scripts": {
+		"dev": "tsx watch src/index.tsx",
+		"build": "tsc",
+		"start": "node dist/index.js",
+		"format": "biome format --write .",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"check": "pnpm lint && pnpm typecheck && pnpm test"
+	},
+	"dependencies": {
+		"@hono/node-server": "^2.0.6",
+		"hono": "^4.12.27"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.1",
+		"@types/node": "^20.11.17",
+		"tsx": "^4.7.1",
+		"typescript": "^5.8.3",
+		"vitest": "4.1.9"
+	}
 }
