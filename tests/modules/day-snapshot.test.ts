@@ -6,12 +6,14 @@ import { createDaySnapshot } from "../../src/modules/day-snapshot.js";
 import type { DaySnapshot } from "../../src/modules/day-snapshot.types.js";
 import { createFoodCatalog } from "../../src/modules/food-catalog.js";
 import { createHydrationLog } from "../../src/modules/hydration-log.js";
+import { createWeightLog } from "../../src/modules/weight-log.js";
 
 interface Fresh {
 	snapshot: ReturnType<typeof createDaySnapshot>;
 	catalog: ReturnType<typeof createFoodCatalog>;
 	log: ReturnType<typeof createConsumptionLog>;
 	hydration: ReturnType<typeof createHydrationLog>;
+	weight: ReturnType<typeof createWeightLog>;
 	store: ReturnType<typeof createDataStore>;
 }
 
@@ -21,8 +23,9 @@ function fresh(): Fresh {
 	const catalog = createFoodCatalog(store);
 	const log = createConsumptionLog(store);
 	const hydration = createHydrationLog(store);
+	const weight = createWeightLog(store);
 	const snapshot = createDaySnapshot(store);
-	return { snapshot, catalog, log, hydration, store };
+	return { snapshot, catalog, log, hydration, weight, store };
 }
 
 const OATMEAL = {
@@ -173,5 +176,32 @@ describe("DaySnapshot", () => {
 		const snap = snapshot.getDaySnapshot("2025-01-01");
 
 		expect(snap.water).toEqual({ ounces: 24 });
+	});
+
+	it("omits weight for a day with none recorded", () => {
+		const { snapshot } = fresh();
+
+		const snap = snapshot.getDaySnapshot("2025-01-01");
+
+		expect(snap.weight).toBeUndefined();
+	});
+
+	it("includes the canonical kilograms when a weight is recorded", () => {
+		const { snapshot, weight } = fresh();
+		weight.recordWeight("2025-01-01", 176.37, "lb");
+
+		const snap = snapshot.getDaySnapshot("2025-01-01");
+
+		expect(snap.weight?.kilograms).toBeCloseTo(80, 1);
+	});
+
+	it("reflects a same-day overwrite in the snapshot", () => {
+		const { snapshot, weight } = fresh();
+		weight.recordWeight("2025-01-01", 80, "kg");
+		weight.recordWeight("2025-01-01", 79.5, "kg");
+
+		expect(snapshot.getDaySnapshot("2025-01-01").weight).toEqual({
+			kilograms: 79.5,
+		});
 	});
 });

@@ -9,6 +9,8 @@ import type { FoodCatalog } from "../../../src/modules/food-catalog.js";
 import { createFoodCatalog } from "../../../src/modules/food-catalog.js";
 import { createHydrationLog } from "../../../src/modules/hydration-log.js";
 import type { HydrationLog } from "../../../src/modules/hydration-log.types.js";
+import { createWeightLog } from "../../../src/modules/weight-log.js";
+import type { WeightLog } from "../../../src/modules/weight-log.types.js";
 import { createLogRoutes } from "../../../src/routes/web/log.jsx";
 
 interface Harness {
@@ -16,6 +18,7 @@ interface Harness {
 	catalog: FoodCatalog;
 	log: ConsumptionLog;
 	hydration: HydrationLog;
+	weight: WeightLog;
 	snapshot: DaySnapshotReader;
 	store: ReturnType<typeof createDataStore>;
 }
@@ -26,9 +29,10 @@ function harness(): Harness {
 	const catalog = createFoodCatalog(store);
 	const log = createConsumptionLog(store);
 	const hydration = createHydrationLog(store);
+	const weight = createWeightLog(store);
 	const snapshot = createDaySnapshot(store);
-	const app = createLogRoutes(catalog, log, snapshot, hydration);
-	return { app, catalog, log, hydration, snapshot, store };
+	const app = createLogRoutes(catalog, log, snapshot, hydration, weight);
+	return { app, catalog, log, hydration, weight, snapshot, store };
 }
 
 function formPost(fields: Record<string, string>): {
@@ -264,7 +268,10 @@ describe("GET /days/:date — log form unit selector", () => {
 		const res = await app.request("/2025-01-01");
 		expect(res.status).toBe(200);
 		const html = await res.text();
-		expect(html).not.toContain('name="unit"');
+		// The food log form renders no g/oz options for a count-based Food.
+		// (The weight form's kg/lb `name="unit"` select is a separate concern.)
+		expect(html).not.toContain('<option value="g"');
+		expect(html).not.toContain('<option value="oz"');
 	});
 });
 
@@ -484,6 +491,123 @@ describe("POST /days/:date/water", () => {
 		const res = await app.request(
 			"/not-a-date/water",
 			formPost({ delta: "8" }),
+		);
+
+		expect(res.status).toBe(400);
+	});
+});
+
+describe("GET /days/:date — weight section", () => {
+	it("renders the no-weight state when none is recorded", async () => {
+		const { app } = harness();
+
+		const html = await (await app.request("/2025-01-01")).text();
+
+		expect(html).toContain("Weight");
+		expect(html).toContain("No weight recorded.");
+	});
+
+	it("offers a kg/lb unit selector and a record form", async () => {
+		const { app } = harness();
+
+		const html = await (await app.request("/2025-01-01")).text();
+
+		expect(html).toContain('action="/days/2025-01-01/weight"');
+		expect(html).toContain('name="value"');
+		expect(html).toContain('<option value="kg"');
+		expect(html).toContain('<option value="lb"');
+	});
+
+	it("shows the recorded weight in kg by default", async () => {
+		const { app, weight } = harness();
+		weight.recordWeight("2025-01-01", 80, "kg");
+
+		const html = await (await app.request("/2025-01-01")).text();
+
+		expect(html).toMatch(/data-testid="weight-value"[^>]*>80</);
+	});
+
+	it("shows the recorded weight in lb when requested via the query param", async () => {
+		const { app, weight } = harness();
+		weight.recordWeight("2025-01-01", 80, "kg");
+
+		const html = await (await app.request("/2025-01-01?weightUnit=lb")).text();
+
+		expect(html).toMatch(/data-testid="weight-value"[^>]*>176.37</);
+	});
+
+	it("defaults to kg for an invalid weightUnit query param", async () => {
+		const { app, weight } = harness();
+		weight.recordWeight("2025-01-01", 80, "kg");
+
+		const html = await (await app.request("/2025-01-01?weightUnit=st")).text();
+
+		expect(html).toMatch(/data-testid="weight-value"[^>]*>80</);
+	});
+});
+
+describe("POST /days/:date/weight", () => {
+	it("records a kg weight and redirects back with the chosen display unit", async () => {
+		const { app, weight } = harness();
+
+		const res = await app.request(
+			"/2025-01-01/weight",
+			formPost({ value: "80", unit: "kg" }),
+		);
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get("location")).toBe("/days/2025-01-01?weightUnit=kg");
+		expect(weight.getWeight("2025-01-01", "kg")?.value).toBe(80);
+	});
+
+	it("records an lb weight canonically as kg and redirects with lb display", async () => {
+		const { app, weight } = harness();
+
+		const res = await app.request(
+			"/2025-01-01/weight",
+			formPost({ value: "176.37", unit: "lb" }),
+		);
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get("location")).toBe("/days/2025-01-01?weightUnit=lb");
+		expect(weight.getWeight("2025-01-01", "kg")?.value).toBeCloseTo(80, 1);
+	});
+
+	it("overwrites the prior weight on a second record for the same day", async () => {
+		const { app, weight } = harness();
+
+		await app.request(
+			"/2025-01-01/weight",
+			formPost({ value: "80", unit: "kg" }),
+		);
+		await app.request(
+			"/2025-01-01/weight",
+			formPost({ value: "79.5", unit: "kg" }),
+		);
+
+		expect(weight.getWeight("2025-01-01", "kg")?.value).toBe(79.5);
+	});
+
+	it("re-renders the day with an error for a non-positive value", async () => {
+		const { app, weight } = harness();
+
+		const res = await app.request(
+			"/2025-01-01/weight",
+			formPost({ value: "0", unit: "kg" }),
+		);
+
+		expect(res.status).toBe(200);
+		const html = await res.text();
+		expect(html).toContain("weight must be a positive number");
+		expect(weight.getWeight("2025-01-01", "kg")).toBeUndefined();
+	});
+
+	it("rejects a malformed date with 400", async () => {
+		const { app } = harness();
+
+		const res = await app.request(
+			"/not-a-date/weight",
+			formPost({ value: "80", unit: "kg" }),
 		);
 
 		expect(res.status).toBe(400);

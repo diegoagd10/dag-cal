@@ -28,3 +28,8 @@ export const dailyWater = sqliteTable("daily_water", {
 	date: text("date").primaryKey(),
 	ounces: real("ounces").notNull(),
 });
+
+export const weightMeasurements = sqliteTable("weight_measurements", {
+	date: text("date").primaryKey(),
+	kilograms: real("kilograms").notNull(),
+});

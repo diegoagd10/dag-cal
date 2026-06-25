@@ -25,11 +25,13 @@ export function createDaySnapshot(store: DataStore): DaySnapshotReader {
 				addInto(totals, macros);
 			}
 
+			const kilograms = store.findWeightByDate(date);
 			return {
 				date,
 				totals,
 				entries: snapshotEntries,
 				water: { ounces: store.findWaterByDate(date) ?? 0 },
+				...(kilograms !== undefined ? { weight: { kilograms } } : {}),
 			};
 		},
 	};

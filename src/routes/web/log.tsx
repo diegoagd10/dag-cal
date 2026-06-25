@@ -17,8 +17,10 @@ import {
 } from "../../modules/food-catalog.js";
 import type { HydrationLog } from "../../modules/hydration-log.types.js";
 import { ValidationError as HydrationValidationError } from "../../modules/hydration-log.types.js";
-import type { WeightUnit } from "../../modules/units.js";
-import { convertWeight } from "../../modules/units.js";
+import type { FoodWeightUnit, WeightUnit } from "../../modules/units.js";
+import { convertWeight, kgToLb } from "../../modules/units.js";
+import type { WeightLog } from "../../modules/weight-log.types.js";
+import { ValidationError as WeightValidationError } from "../../modules/weight-log.types.js";
 import { Layout } from "../../views/Layout.jsx";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -31,6 +33,7 @@ export function createLogRoutes(
 	log: ConsumptionLog,
 	snapshot: DaySnapshotReader,
 	hydration: HydrationLog,
+	weight: WeightLog,
 ): Hono {
 	const app = new Hono();
 
@@ -41,6 +44,7 @@ export function createLogRoutes(
 
 		const foods = catalog.listActiveFoods();
 		const daySnapshot = snapshot.getDaySnapshot(date);
+		const weightUnit = resolveWeightUnit(c.req.query("weightUnit"));
 
 		return c.html(
 			<Layout title={`Log — ${date}`}>
@@ -48,6 +52,7 @@ export function createLogRoutes(
 					date={date}
 					foods={foods}
 					daySnapshot={daySnapshot}
+					weightUnit={weightUnit}
 					prev={shiftDate(date, -1)}
 					next={shiftDate(date, 1)}
 				/>
@@ -113,6 +118,24 @@ export function createLogRoutes(
 		}
 	});
 
+	// POST /days/:date/weight — recordWeight (kg or lb)
+	app.post("/:date/weight", async (c) => {
+		const date = c.req.param("date");
+		if (!ISO_DATE.test(date)) return c.text("Invalid date", 400);
+		const body = await c.req.parseBody();
+		const unit = resolveWeightUnit(String(body.unit ?? ""));
+
+		try {
+			weight.recordWeight(date, parseWeightValue(body.value), unit);
+			return c.redirect(`/days/${date}?weightUnit=${unit}`);
+		} catch (e) {
+			if (e instanceof WeightValidationError || e instanceof ValidationError) {
+				return renderDayWith(c, catalog, snapshot, date, e.message, body, unit);
+			}
+			throw e;
+		}
+	});
+
 	// POST /entries/:id — update quantity
 	app.post("/entries/:id", async (c) => {
 		const id = c.req.param("id");
@@ -158,6 +181,7 @@ async function renderDayWith(
 	date: string,
 	error: string,
 	body: Record<string, unknown>,
+	weightUnit: WeightUnit = "kg",
 ) {
 	const foods = catalog.listActiveFoods();
 	const daySnapshot = snapshot.getDaySnapshot(date);
@@ -167,6 +191,7 @@ async function renderDayWith(
 				date={date}
 				foods={foods}
 				daySnapshot={daySnapshot}
+				weightUnit={weightUnit}
 				prev={shiftDate(date, -1)}
 				next={shiftDate(date, 1)}
 				error={error}
@@ -228,7 +253,26 @@ function parseDelta(raw: unknown): number {
 	return n;
 }
 
-function isWeightUnit(unit: unknown): unit is WeightUnit {
+/**
+ * Resolve a body-weight display preference from the `weightUnit` query param.
+ * Defaults to kg for an absent/invalid value — keeping display state in the URL
+ * (not a cookie) so server-rendered tests stay stateless.
+ */
+function resolveWeightUnit(raw: string | undefined): WeightUnit {
+	return raw === "lb" ? "lb" : "kg";
+}
+
+/** Parse a positive body-weight value (kg or lb) from the submitted form. */
+function parseWeightValue(raw: unknown): number {
+	const str = typeof raw === "string" ? raw.trim() : "";
+	const n = Number(str);
+	if (str === "" || Number.isNaN(n) || !Number.isFinite(n) || n <= 0) {
+		throw new ValidationError("weight must be a positive number");
+	}
+	return n;
+}
+
+function isWeightUnit(unit: unknown): unit is FoodWeightUnit {
 	return unit === "g" || unit === "oz";
 }
 
@@ -267,7 +311,9 @@ interface DayViewProps {
 		totals: Nutrition;
 		entries: { entry: LogEntry; food: Food; macros: Nutrition }[];
 		water: { ounces: number };
+		weight?: { kilograms: number };
 	};
+	weightUnit: WeightUnit;
 	prev: string;
 	next: string;
 	error?: string;
@@ -278,6 +324,7 @@ const DayView: FC<DayViewProps> = ({
 	date,
 	foods,
 	daySnapshot,
+	weightUnit,
 	prev,
 	next,
 	error,
@@ -300,6 +347,7 @@ const DayView: FC<DayViewProps> = ({
 		/>
 		<Totals totals={daySnapshot.totals} />
 		<WaterSection date={date} ounces={daySnapshot.water.ounces} />
+		<WeightSection date={date} weight={daySnapshot.weight} unit={weightUnit} />
 		<h2>Entries</h2>
 		{daySnapshot.entries.length === 0 ? (
 			<p>Nothing logged yet.</p>
@@ -504,6 +552,56 @@ const WaterSection: FC<WaterSectionProps> = ({ date, ounces }) => {
 					</form>
 				))}
 			</p>
+		</section>
+	);
+};
+
+interface WeightSectionProps {
+	date: string;
+	weight?: { kilograms: number };
+	unit: WeightUnit;
+}
+
+/**
+ * Weight UI (ADR 0002): the snapshot carries only canonical kilograms; the
+ * view converts to the requested display unit (kg or lb). The form posts the
+ * value and unit to the weight route, which persists kg — switching display
+ * units never corrupts history. Display preference lives in the `weightUnit`
+ * query param so server-rendered tests stay stateless.
+ */
+const WeightSection: FC<WeightSectionProps> = ({ date, weight, unit }) => {
+	const kilograms = weight?.kilograms;
+	const display =
+		kilograms === undefined
+			? undefined
+			: unit === "kg"
+				? kilograms
+				: kgToLb(kilograms);
+	return (
+		<section>
+			<h2>Weight</h2>
+			{display === undefined ? (
+				<p>No weight recorded.</p>
+			) : (
+				<p>
+					<strong data-testid="weight-value">{round(display)}</strong> {unit}
+				</p>
+			)}
+			<form method="post" action={`/days/${date}/weight`}>
+				<label>
+					Weight:{" "}
+					<input name="value" type="number" step="any" min="0" required />
+				</label>
+				<select name="unit">
+					<option value="kg" selected={unit === "kg"}>
+						kg
+					</option>
+					<option value="lb" selected={unit === "lb"}>
+						lb
+					</option>
+				</select>
+				<button type="submit">Record</button>
+			</form>
 		</section>
 	);
 };

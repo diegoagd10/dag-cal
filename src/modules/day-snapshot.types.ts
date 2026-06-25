@@ -21,6 +21,7 @@ export interface DaySnapshot {
 	totals: Nutrition;
 	entries: SnapshotEntry[];
 	water: { ounces: number };
+	weight?: { kilograms: number };
 }
 
 export interface DaySnapshotReader {

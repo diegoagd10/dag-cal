@@ -11,7 +11,7 @@ import type {
 	Nutrition,
 	ReferencePortion,
 } from "../modules/food-catalog.types.js";
-import { dailyWater, foods, logEntries } from "./schema.js";
+import { dailyWater, foods, logEntries, weightMeasurements } from "./schema.js";
 
 function rowToFood(row: typeof foods.$inferSelect): Food {
 	return {
@@ -66,6 +66,8 @@ export interface DataStore {
 	findEntriesByDate(date: string): LogEntry[];
 	findWaterByDate(date: string): number | undefined;
 	upsertWater(date: string, ounces: number): number;
+	findWeightByDate(date: string): number | undefined;
+	upsertWeight(date: string, kilograms: number): void;
 }
 
 function rowToLogEntry(row: typeof logEntries.$inferSelect): LogEntry {
@@ -109,6 +111,10 @@ export function createDataStore(db: SqliteDatabase): DataStore {
 		CREATE TABLE IF NOT EXISTS daily_water (
 			date TEXT PRIMARY KEY,
 			ounces REAL NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS weight_measurements (
+			date TEXT PRIMARY KEY,
+			kilograms REAL NOT NULL
 		);
 	`);
 
@@ -285,6 +291,26 @@ export function createDataStore(db: SqliteDatabase): DataStore {
 				})
 				.run();
 			return ounces;
+		},
+
+		findWeightByDate(date) {
+			const row = orm
+				.select()
+				.from(weightMeasurements)
+				.where(eq(weightMeasurements.date, date))
+				.get();
+			return row?.kilograms;
+		},
+
+		upsertWeight(date, kilograms) {
+			orm
+				.insert(weightMeasurements)
+				.values({ date, kilograms })
+				.onConflictDoUpdate({
+					target: weightMeasurements.date,
+					set: { kilograms },
+				})
+				.run();
 		},
 	};
 }
