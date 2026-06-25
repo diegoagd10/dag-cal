@@ -7,6 +7,7 @@ import { createDataStore } from "./data/store.js";
 import { createConsumptionLog } from "./modules/consumption-log.js";
 import { createDaySnapshot } from "./modules/day-snapshot.js";
 import { createFoodCatalog } from "./modules/food-catalog.js";
+import { createHydrationLog } from "./modules/hydration-log.js";
 import { createFoodsRoutes } from "./routes/web/foods.jsx";
 import { createLogRoutes } from "./routes/web/log.jsx";
 import { Layout } from "./views/Layout.jsx";
@@ -20,6 +21,7 @@ const db = new Database(DB_PATH);
 const store = createDataStore(db);
 const catalog = createFoodCatalog(store);
 const consumptionLog = createConsumptionLog(store);
+const hydrationLog = createHydrationLog(store);
 const daySnapshot = createDaySnapshot(store);
 
 const app = new Hono();
@@ -43,7 +45,10 @@ app.get("/", (c) => {
 });
 
 app.route("/foods", createFoodsRoutes(catalog));
-app.route("/days", createLogRoutes(catalog, consumptionLog, daySnapshot));
+app.route(
+	"/days",
+	createLogRoutes(catalog, consumptionLog, daySnapshot, hydrationLog),
+);
 
 serve(
 	{

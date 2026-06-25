@@ -5,11 +5,13 @@ import { createConsumptionLog } from "../../src/modules/consumption-log.js";
 import { createDaySnapshot } from "../../src/modules/day-snapshot.js";
 import type { DaySnapshot } from "../../src/modules/day-snapshot.types.js";
 import { createFoodCatalog } from "../../src/modules/food-catalog.js";
+import { createHydrationLog } from "../../src/modules/hydration-log.js";
 
 interface Fresh {
 	snapshot: ReturnType<typeof createDaySnapshot>;
 	catalog: ReturnType<typeof createFoodCatalog>;
 	log: ReturnType<typeof createConsumptionLog>;
+	hydration: ReturnType<typeof createHydrationLog>;
 	store: ReturnType<typeof createDataStore>;
 }
 
@@ -18,8 +20,9 @@ function fresh(): Fresh {
 	const store = createDataStore(db);
 	const catalog = createFoodCatalog(store);
 	const log = createConsumptionLog(store);
+	const hydration = createHydrationLog(store);
 	const snapshot = createDaySnapshot(store);
-	return { snapshot, catalog, log, store };
+	return { snapshot, catalog, log, hydration, store };
 }
 
 const OATMEAL = {
@@ -153,5 +156,22 @@ describe("DaySnapshot", () => {
 		expect(snap.entries[0].food.id).toBe(food.id);
 		expect(snap.entries[0].food.archived).toBe(true);
 		expect(snap.totals.calories).toBe(389);
+	});
+
+	it("includes water ounces, defaulting to 0 for a day with none", () => {
+		const { snapshot } = fresh();
+
+		const snap = snapshot.getDaySnapshot("2025-01-01");
+
+		expect(snap.water).toEqual({ ounces: 0 });
+	});
+
+	it("reflects the persisted water total in the snapshot", () => {
+		const { snapshot, hydration } = fresh();
+		hydration.adjustWater("2025-01-01", 24);
+
+		const snap = snapshot.getDaySnapshot("2025-01-01");
+
+		expect(snap.water).toEqual({ ounces: 24 });
 	});
 });

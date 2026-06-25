@@ -15,16 +15,22 @@ import {
 	FoodNotFoundError,
 	ValidationError,
 } from "../../modules/food-catalog.js";
+import type { HydrationLog } from "../../modules/hydration-log.types.js";
+import { ValidationError as HydrationValidationError } from "../../modules/hydration-log.types.js";
 import type { WeightUnit } from "../../modules/units.js";
 import { convertWeight } from "../../modules/units.js";
 import { Layout } from "../../views/Layout.jsx";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+const GLASS_OZ = 8;
+const BOTTLE_OZ = 16;
+
 export function createLogRoutes(
 	catalog: FoodCatalog,
 	log: ConsumptionLog,
 	snapshot: DaySnapshotReader,
+	hydration: HydrationLog,
 ): Hono {
 	const app = new Hono();
 
@@ -82,6 +88,26 @@ export function createLogRoutes(
 					`Food is archived`,
 					body,
 				);
+			}
+			throw e;
+		}
+	});
+
+	// POST /days/:date/water — adjustWater with a signed ounce delta
+	app.post("/:date/water", async (c) => {
+		const date = c.req.param("date");
+		if (!ISO_DATE.test(date)) return c.text("Invalid date", 400);
+		const body = await c.req.parseBody();
+
+		try {
+			hydration.adjustWater(date, parseDelta(body.delta));
+			return c.redirect(`/days/${date}`);
+		} catch (e) {
+			if (
+				e instanceof ValidationError ||
+				e instanceof HydrationValidationError
+			) {
+				return renderDayWith(c, catalog, snapshot, date, e.message, body);
 			}
 			throw e;
 		}
@@ -189,6 +215,19 @@ function parseQuantity(raw: unknown): number {
 	return n;
 }
 
+/**
+ * Parse a signed ounce delta from the water preset form. Zero, negatives,
+ * and decimals are all valid — only non-numeric / non-finite input is rejected.
+ */
+function parseDelta(raw: unknown): number {
+	const str = typeof raw === "string" ? raw.trim() : "";
+	const n = Number(str);
+	if (str === "" || Number.isNaN(n) || !Number.isFinite(n)) {
+		throw new ValidationError("delta must be a finite number");
+	}
+	return n;
+}
+
 function isWeightUnit(unit: unknown): unit is WeightUnit {
 	return unit === "g" || unit === "oz";
 }
@@ -227,6 +266,7 @@ interface DayViewProps {
 	daySnapshot: {
 		totals: Nutrition;
 		entries: { entry: LogEntry; food: Food; macros: Nutrition }[];
+		water: { ounces: number };
 	};
 	prev: string;
 	next: string;
@@ -259,6 +299,7 @@ const DayView: FC<DayViewProps> = ({
 			defaults={formDefaults}
 		/>
 		<Totals totals={daySnapshot.totals} />
+		<WaterSection date={date} ounces={daySnapshot.water.ounces} />
 		<h2>Entries</h2>
 		{daySnapshot.entries.length === 0 ? (
 			<p>Nothing logged yet.</p>
@@ -422,6 +463,48 @@ const LogEntryRow: FC<LogEntryRowProps> = ({ date, entry, food, macros }) => {
 				<button type="submit">Remove</button>
 			</form>
 		</li>
+	);
+};
+
+interface WaterSectionProps {
+	date: string;
+	ounces: number;
+}
+
+/**
+ * Water UI (ADR 0002): presets (glass = 8 oz, bottle = 16 oz) and the
+ * `glasses = oz / 8` display are presentation only — each preset form posts
+ * a signed ounce delta to the water route; the domain persists just the
+ * running total.
+ */
+const WaterSection: FC<WaterSectionProps> = ({ date, ounces }) => {
+	const glasses = ounces / GLASS_OZ;
+	const presets = [
+		{ label: "+ Glass", delta: GLASS_OZ },
+		{ label: "− Glass", delta: -GLASS_OZ },
+		{ label: "+ Bottle", delta: BOTTLE_OZ },
+		{ label: "− Bottle", delta: -BOTTLE_OZ },
+	];
+	return (
+		<section>
+			<h2>Water</h2>
+			<p>
+				<strong data-testid="water-ounces">{round(ounces)}</strong> oz ·{" "}
+				<span data-testid="water-glasses">{round(glasses)}</span> glasses
+			</p>
+			<p>
+				{presets.map((p) => (
+					<form
+						method="post"
+						action={`/days/${date}/water`}
+						style="display: inline;"
+					>
+						<input type="hidden" name="delta" value={p.delta} />
+						<button type="submit">{p.label}</button>
+					</form>
+				))}
+			</p>
+		</section>
 	);
 };
 

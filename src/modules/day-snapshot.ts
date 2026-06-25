@@ -25,7 +25,12 @@ export function createDaySnapshot(store: DataStore): DaySnapshotReader {
 				addInto(totals, macros);
 			}
 
-			return { date, totals, entries: snapshotEntries };
+			return {
+				date,
+				totals,
+				entries: snapshotEntries,
+				water: { ounces: store.findWaterByDate(date) ?? 0 },
+			};
 		},
 	};
 }

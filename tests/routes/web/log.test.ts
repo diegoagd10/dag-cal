@@ -7,12 +7,15 @@ import { createDaySnapshot } from "../../../src/modules/day-snapshot.js";
 import type { DaySnapshotReader } from "../../../src/modules/day-snapshot.types.js";
 import type { FoodCatalog } from "../../../src/modules/food-catalog.js";
 import { createFoodCatalog } from "../../../src/modules/food-catalog.js";
+import { createHydrationLog } from "../../../src/modules/hydration-log.js";
+import type { HydrationLog } from "../../../src/modules/hydration-log.types.js";
 import { createLogRoutes } from "../../../src/routes/web/log.jsx";
 
 interface Harness {
 	app: ReturnType<typeof createLogRoutes>;
 	catalog: FoodCatalog;
 	log: ConsumptionLog;
+	hydration: HydrationLog;
 	snapshot: DaySnapshotReader;
 	store: ReturnType<typeof createDataStore>;
 }
@@ -22,9 +25,10 @@ function harness(): Harness {
 	const store = createDataStore(db);
 	const catalog = createFoodCatalog(store);
 	const log = createConsumptionLog(store);
+	const hydration = createHydrationLog(store);
 	const snapshot = createDaySnapshot(store);
-	const app = createLogRoutes(catalog, log, snapshot);
-	return { app, catalog, log, snapshot, store };
+	const app = createLogRoutes(catalog, log, snapshot, hydration);
+	return { app, catalog, log, hydration, snapshot, store };
 }
 
 function formPost(fields: Record<string, string>): {
@@ -397,5 +401,91 @@ describe("GET /days/:date — day snapshot view", () => {
 		const html = await (await app.request("/2025-01-01")).text();
 		expect(html).toContain("Archived Oatmeal");
 		expect(html).toMatch(/total-calories[^>]*>389<\/strong>/);
+	});
+});
+
+describe("GET /days/:date — water section", () => {
+	it("renders the day's water ounces and glasses, defaulting to 0", async () => {
+		const { app } = harness();
+
+		const res = await app.request("/2025-01-01");
+		expect(res.status).toBe(200);
+		const html = await res.text();
+
+		expect(html).toContain("Water");
+		expect(html).toMatch(/data-testid="water-ounces"[^>]*>0</);
+		expect(html).toMatch(/data-testid="water-glasses"[^>]*>0</);
+	});
+
+	it("renders ounces and glasses = oz / 8 after water is added", async () => {
+		const { app, hydration } = harness();
+		hydration.adjustWater("2025-01-01", 24); // 3 glasses
+
+		const html = await (await app.request("/2025-01-01")).text();
+
+		expect(html).toMatch(/data-testid="water-ounces"[^>]*>24</);
+		expect(html).toMatch(/data-testid="water-glasses"[^>]*>3</);
+	});
+
+	it("offers glass (8 oz) and bottle (16 oz) presets with + and − buttons", async () => {
+		const { app } = harness();
+
+		const html = await (await app.request("/2025-01-01")).text();
+
+		// Four preset forms posting signed ounce deltas to the water route.
+		expect(html).toContain('action="/days/2025-01-01/water"');
+		expect(html).toContain('name="delta" value="8"'); // +glass
+		expect(html).toContain('name="delta" value="-8"'); // −glass
+		expect(html).toContain('name="delta" value="16"'); // +bottle
+		expect(html).toContain('name="delta" value="-16"'); // −bottle
+	});
+});
+
+describe("POST /days/:date/water", () => {
+	it("adds a positive delta and redirects back to the day", async () => {
+		const { app, hydration } = harness();
+
+		const res = await app.request(
+			"/2025-01-01/water",
+			formPost({ delta: "8" }),
+		);
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get("location")).toBe("/days/2025-01-01");
+		expect(hydration.getWater("2025-01-01").ounces).toBe(8);
+	});
+
+	it("subtracts a negative delta, clamping at 0", async () => {
+		const { app, hydration } = harness();
+
+		await app.request("/2025-01-01/water", formPost({ delta: "8" }));
+		await app.request("/2025-01-01/water", formPost({ delta: "-20" }));
+
+		expect(hydration.getWater("2025-01-01").ounces).toBe(0);
+	});
+
+	it("re-renders the day with an error for a non-numeric delta", async () => {
+		const { app, hydration } = harness();
+
+		const res = await app.request(
+			"/2025-01-01/water",
+			formPost({ delta: "abc" }),
+		);
+
+		expect(res.status).toBe(200);
+		const html = await res.text();
+		expect(html).toContain("delta must be a finite number");
+		expect(hydration.getWater("2025-01-01").ounces).toBe(0);
+	});
+
+	it("rejects a malformed date with 400", async () => {
+		const { app } = harness();
+
+		const res = await app.request(
+			"/not-a-date/water",
+			formPost({ delta: "8" }),
+		);
+
+		expect(res.status).toBe(400);
 	});
 });

@@ -23,3 +23,8 @@ export const logEntries = sqliteTable("log_entries", {
 		.references(() => foods.id),
 	quantity: real("quantity").notNull(),
 });
+
+export const dailyWater = sqliteTable("daily_water", {
+	date: text("date").primaryKey(),
+	ounces: real("ounces").notNull(),
+});

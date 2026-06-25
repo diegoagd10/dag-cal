@@ -20,6 +20,7 @@ export interface DaySnapshot {
 	date: IsoDate;
 	totals: Nutrition;
 	entries: SnapshotEntry[];
+	water: { ounces: number };
 }
 
 export interface DaySnapshotReader {
